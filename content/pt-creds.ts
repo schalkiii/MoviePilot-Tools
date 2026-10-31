@@ -24,8 +24,8 @@ export function initPtCreds(): void {
 }
 
 async function bootstrap(): Promise<void> {
-  const host = location.hostname
-  const rules = await getBlacklistRules(host)
+  const origin = location.origin
+  const rules = await getBlacklistRules(origin)
 
   // 登录提交检测：始终挂载（是否弹窗由后续规则决定）
   setupLoginDetection()
@@ -33,7 +33,7 @@ async function bootstrap(): Promise<void> {
   window.setTimeout(() => void checkLoginSuccessAndPrompt(), 800)
 
   if (!rules.blockLoginFill) {
-    void tryAutoFill(host)
+    void tryAutoFill(origin)
   }
 }
 
@@ -161,8 +161,8 @@ function fillCredentials(username: string, password: string): boolean {
   }
 }
 
-async function tryAutoFill(host: string): Promise<void> {
-  const cred = await fetchCred(host)
+async function tryAutoFill(origin: string): Promise<void> {
+  const cred = await fetchCred(origin)
   if (!cred?.password) return
   if (cred.autoFillEnabled === false) return
 
@@ -202,7 +202,7 @@ function setupLoginDetection(): void {
       try {
         sessionStorage.setItem('mp_pending_username', userInput.value.trim())
         sessionStorage.setItem('mp_pending_password', pwInput.value.trim())
-        sessionStorage.setItem('mp_pending_domain', location.hostname)
+        sessionStorage.setItem('mp_pending_domain', location.origin)
         sessionStorage.setItem('mp_pending_time', String(Date.now()))
       } catch {
         /* 页面存储不可用时跳过本次凭据暂存，后续输入事件仍可重试。 */
@@ -315,7 +315,7 @@ async function checkLoginSuccessAndPrompt(): Promise<void> {
     const domain = sessionStorage.getItem('mp_pending_domain') || ''
     const username = sessionStorage.getItem('mp_pending_username') || ''
     const password = sessionStorage.getItem('mp_pending_password') || ''
-    if (!domain || domain !== location.hostname || !username || !password) return
+    if (!domain || domain !== location.origin || !username || !password) return
     // 仍可见密码框 ≈ 登录页，未成功
     if (hasVisiblePasswordInput()) return
 

@@ -28,8 +28,9 @@
           :class="{
             'mp-view--full':
               appState.currentView === 'plugins' || appState.currentView === 'agent',
-            /* 下载 / 两步验证 / 凭据 / 智能助手：顶栏贴边，无外层 L/R/T 边距 */
+            /* 站点管理 / 下载 / 两步验证 / 凭据 / 智能助手：顶栏贴边，滚动交给页面内部列表区 */
             'mp-view--flush':
+              appState.currentView === 'sites' ||
               appState.currentView === 'downloads' ||
               appState.currentView === 'totp' ||
               appState.currentView === 'credentials' ||

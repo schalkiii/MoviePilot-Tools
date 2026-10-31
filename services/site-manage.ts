@@ -682,3 +682,18 @@ export async function saveUpdateDisableState(site: Site, value: boolean): Promis
     draft.sites = { ...(draft.sites || {}), autoUpdateDisabledIds: [...ids] }
   })
 }
+
+/** 一次读取公共存储并批量补齐站点本地开关，避免逐站点重复读取。 */
+export async function withSiteDisableStates(sites: Site[]): Promise<Site[]> {
+  const settings = (await getPublicStore()).sites || {}
+  const disabledIds = new Set(settings.disabledIds || [])
+  const updateDisabledIds = new Set(settings.autoUpdateDisabledIds || [])
+  return sites.map((site) => {
+    const id = siteStateId(site)
+    return {
+      ...site,
+      isDisabled: id !== null && disabledIds.has(id),
+      isUpdateDisabled: id !== null && updateDisabledIds.has(id),
+    }
+  })
+}

@@ -900,16 +900,13 @@ function getCategory(item: PtCredential): CredentialCategory {
   return item.domain ? 'pt' : 'custom'
 }
 
-/**
- * 列表展示域名：只显示主机名，不带 http(s):// 前缀
- * 与两步验证 TotpView.displayDomain 同一规则
- */
+/** 列表展示主机与非默认端口，不带 http(s):// 前缀。 */
 function displayDomain(raw?: string): string {
   const input = (raw || '').trim()
   if (!input) return ''
   try {
     const withProto = /^https?:\/\//i.test(input) ? input : `https://${input}`
-    return new URL(withProto).hostname.replace(/^\./, '') || input
+    return new URL(withProto).host.replace(/^\./, '') || input
   } catch {
     return input.replace(/^https?:\/\//i, '').split('/')[0]
   }

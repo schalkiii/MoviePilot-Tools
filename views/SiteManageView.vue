@@ -58,8 +58,8 @@
         >
           <svg viewBox="0 0 24 24" class="sm-btn-icon"><path :d="mdiOpenInNew" /></svg>打开
         </el-button>
-        <el-button size="small" class="sm-tool-btn" title="刷新站点数据" :disabled="loading" @click="refresh">
-          <svg viewBox="0 0 24 24" class="sm-btn-icon" :class="{ 'sm-spin': loading }"><path :d="mdiRefresh" /></svg>刷新
+        <el-button size="small" class="sm-tool-btn" title="刷新站点数据" :disabled="loading || refreshing" @click="refresh">
+          <svg viewBox="0 0 24 24" class="sm-btn-icon" :class="{ 'sm-spin': loading || refreshing }"><path :d="mdiRefresh" /></svg>刷新
         </el-button>
         <el-button
           size="small"
@@ -84,6 +84,7 @@
       </div>
     </div>
 
+    <div class="sm-scroll">
     <el-skeleton v-if="loading" :rows="6" animated />
     <el-result v-else-if="error" icon="error" title="加载失败" :sub-title="error">
       <template #extra>
@@ -121,16 +122,19 @@
             <div class="sm-name" :title="site.name || site.domain">
               {{ site.name || site.domain }}
             </div>
-            <div
+            <a
               class="sm-domain"
+              :href="siteLink(site)"
+              target="_blank"
+              rel="noopener noreferrer"
               :title="site.url || site.domain"
-              @click="openLink(site.url || (site.domain ? `https://${site.domain}` : ''))"
+              @click="openSiteDomain($event, siteLink(site))"
             >
               <svg viewBox="0 0 24 24" width="9" height="9" class="sm-domain-icon">
                 <path :d="mdiOpenInNew" />
               </svg>
               {{ site.domain || hostnameOf(site.url || '') }}
-            </div>
+            </a>
           </div>
           <div v-if="cardTags(site).length" class="sm-card-head-tags">
             <span
@@ -260,6 +264,7 @@
           </div>
         </div>
       </div>
+    </div>
     </div>
 
     <!-- 添加/编辑站点：仅覆盖主内容区，保留侧栏与顶栏 -->
@@ -608,6 +613,7 @@ import {
 } from '@mdi/js'
 import {
   fetchSites,
+  loadStoredSites,
   updateSite,
   createSite,
   deleteSite,
@@ -616,10 +622,9 @@ import {
   syncSiteToServer,
   clearSiteBrowserCookie,
   testConnection,
-  loadDisableState,
   saveDisableState,
-  loadUpdateDisableState,
   saveUpdateDisableState,
+  withSiteDisableStates,
   buildSiteRows,
   applySiteFilters,
   migrateSiteFilters,
@@ -628,6 +633,7 @@ import {
   type SiteFilterKey,
   type SupportingDict,
 } from '../services/site-manage'
+import { loadCachedSupportingSites } from '../services/site-supporting'
 import { fetchClients } from '../services/download'
 import type { DownloadClient, Site, SiteRow, SiteStatus } from '../core/types'
 import { STORAGE_KEYS, storageGet, storageSet } from '../core/storage'
@@ -647,7 +653,10 @@ const sites = ref<Site[]>([])
 const siteRows = ref<SiteRow[]>([])
 const siteIconMap = ref<Record<string, string>>({})
 const loading = ref(true)
+const refreshing = ref(false)
 const error = ref('')
+let hasLoadedSnapshot = false
+let loadGeneration = 0
 const dialogVisible = ref(false)
 const saving = ref(false)
 const fetchingCookie = ref(false)
@@ -738,51 +747,85 @@ function rebuildRows(): void {
   sites.value = siteRows.value.map((r) => r.site!).filter(Boolean)
 }
 
+async function readBrowserCookies(): Promise<chrome.cookies.Cookie[]> {
+  return new Promise((resolve) => {
+    try {
+      chrome.cookies.getAll({}, (cookies) => resolve(cookies ?? []))
+    } catch {
+      resolve([])
+    }
+  })
+}
+
+async function applySnapshot(
+  serverSites: Site[],
+  supporting: SupportingDict,
+  allCookies: chrome.cookies.Cookie[],
+): Promise<void> {
+  supportingDetails.value = supporting
+  browserSessionMap.value = buildBrowserCookieMap(allCookies)
+  configuredCache.value = await withSiteDisableStates(serverSites)
+  rebuildRows()
+  hasLoadedSnapshot = true
+  loading.value = false
+}
+
+async function resolveIcons(generation: number): Promise<void> {
+  const iconInputs = sites.value.map((s) => {
+    const domain = (s.domain || hostnameOf(s.url || '')).toLowerCase()
+    return { domain, id: s.id, icon: s.icon, name: s.name, url: s.url }
+  })
+  const icons = await resolveSiteIconsBatch(iconInputs, {
+    deferNetworkDiscover: true,
+    onUpdate: (map) => {
+      if (generation === loadGeneration) siteIconMap.value = map
+    },
+  })
+  if (generation === loadGeneration) siteIconMap.value = icons
+}
+
 async function load(): Promise<void> {
-  loading.value = true
+  const generation = ++loadGeneration
   error.value = ''
+  refreshing.value = true
+
+  // 本地快照先渲染对比状态，MP 网络结果到达后再替换，避免每次打开 popup 都等待远端。
+  try {
+    const [cachedSites, cachedSupporting, cachedCookies] = await Promise.all([
+      loadStoredSites(),
+      loadCachedSupportingSites(),
+      readBrowserCookies(),
+    ])
+    if (!hasLoadedSnapshot && (cachedSites.length || cachedSupporting)) {
+      await applySnapshot(cachedSites, cachedSupporting || {}, cachedCookies)
+    }
+  } catch {
+    /* 快照失败时继续请求网络数据。 */
+  }
+
   try {
     const [serverSites, supporting, allCookies] = await Promise.all([
       fetchSites(),
-      fetchSupporting(),
-      new Promise<chrome.cookies.Cookie[]>((resolve) => {
-        try {
-          chrome.cookies.getAll({}, (c) => resolve(c ?? []))
-        } catch {
-          resolve([])
-        }
-      }),
+      fetchSupporting(true),
+      readBrowserCookies(),
     ])
-    supportingDetails.value = supporting
-    browserSessionMap.value = buildBrowserCookieMap(allCookies)
-
-    const configured = await Promise.all(
-      serverSites.map(async (s): Promise<Site> => {
-        const [isDisabled, isUpdateDisabled] = await Promise.all([
-          loadDisableState(s),
-          loadUpdateDisableState(s),
-        ])
-        return { ...s, isDisabled, isUpdateDisabled }
-      }),
-    )
-    configuredCache.value = configured
-    rebuildRows()
-
-    const iconInputs = sites.value.map((s) => {
-      const domain = (s.domain || hostnameOf(s.url || '')).toLowerCase()
-      return { domain, id: s.id, icon: s.icon, name: s.name, url: s.url }
-    })
-    siteIconMap.value = await resolveSiteIconsBatch(iconInputs)
+    if (generation !== loadGeneration) return
+    await applySnapshot(serverSites, supporting, allCookies)
+    void resolveIcons(generation)
   } catch (e) {
-    error.value = String(e)
+    if (!hasLoadedSnapshot) error.value = String(e)
+    else if (generation === loadGeneration) void resolveIcons(generation)
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) {
+      loading.value = false
+      refreshing.value = false
+    }
   }
 }
 
 async function refresh(): Promise<void> {
   await load()
-  ElMessage.success('已刷新')
+  if (!error.value) ElMessage.success('已刷新')
 }
 
 // 辅助
@@ -892,13 +935,26 @@ function avatarBg(s: Site): string {
 function onIconError(e: Event): void {
   ;(e.target as HTMLImageElement).style.display = 'none'
 }
+function siteLink(site: Site): string {
+  return site.url || (site.domain ? `https://${site.domain}` : '')
+}
+
 function openLink(url?: string): void {
   if (!url) return
   try {
-    chrome.tabs.create({ url })
+    void chrome.tabs
+      .create({ url })
+      .catch(() => window.open(url, '_blank'))
   } catch {
     window.open(url, '_blank')
   }
+}
+
+function openSiteDomain(event: MouseEvent, url?: string): void {
+  // 鼠标中键保留原生 <a> 行为，由浏览器直接在新标签页打开。
+  if (!url || event.button === 1) return
+  event.preventDefault()
+  openLink(url)
 }
 
 // 计算属性
@@ -1067,12 +1123,12 @@ async function doUpdate(s: Site): Promise<void> {
   }
 }
 function doLogin(s: Site): void {
-  openLink(s.url || (s.domain ? `https://${s.domain}` : ''))
+  openLink(siteLink(s))
 }
 async function onMenu(command: string, s: Site): Promise<void> {
   switch (command) {
     case 'visit':
-      openLink(s.url || (s.domain ? `https://${s.domain}` : ''))
+      openLink(siteLink(s))
       break
     case 'test':
       await doTest(s)
@@ -1430,6 +1486,15 @@ void loadFilters()
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
+}
+
+/* 站点列表是页面唯一滚动容器，避免外层 mp-view 与内容区出现双重滚动条。 */
+.sm-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 /* 统计面板 */
 .sm-stats {

@@ -212,15 +212,34 @@ export function normalizeCredentialHost(raw?: string): string {
   }
 }
 
-function hostMatches(a: string, b: string): boolean {
-  return domainsMatch(a, b)
+function normalizeCredentialOrigin(raw?: string): string {
+  const input = (raw || '').trim()
+  if (!input) return ''
+  try {
+    const withProtocol = /^https?:\/\//i.test(input) ? input : `https://${input}`
+    const url = new URL(withProtocol)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return ''
+    return `${url.protocol}//${url.host}`
+  } catch {
+    return ''
+  }
+}
+
+/** 域名匹配保持 PT 别名/子域语义，非默认端口必须一致；空端口仅表示默认端口。 */
+function credentialLocationMatches(credentialDomain: string, target: string): boolean {
+  const credentialOrigin = normalizeCredentialOrigin(credentialDomain)
+  const targetOrigin = normalizeCredentialOrigin(target)
+  if (!credentialOrigin || !targetOrigin) return false
+  const credentialUrl = new URL(credentialOrigin)
+  const targetUrl = new URL(targetOrigin)
+  return credentialUrl.port === targetUrl.port && domainsMatch(credentialUrl.hostname, targetUrl.hostname)
 }
 
 export async function getCredentialByHost(host: string): Promise<PtCredential | null> {
   const target = normalizeCredentialHost(host)
   if (!target) return null
   const credentials = await loadRuntimeCredentials()
-  const direct = credentials.filter((credential) => domainsMatch(credential.domain, target))
+  const direct = credentials.filter((credential) => credentialLocationMatches(credential.domain, host))
   if (direct.length === 1) return direct[0]
   if (direct.length > 1) return null
 
@@ -234,6 +253,7 @@ export async function getCredentialByHost(host: string): Promise<PtCredential | 
     if (targetSiteIds.length !== 1) return null
 
     const matched = credentials.filter((credential) => {
+      if (!credentialLocationMatches(credential.domain, host)) return false
       const credentialSiteIds = findSiteIdsByDomain(index, credential.domain)
       return credentialSiteIds.length === 1 && credentialSiteIds[0] === targetSiteIds[0]
     })
@@ -249,14 +269,12 @@ export async function addOrUpdateCredentialFromLogin(input: {
   password: string
   name?: string
 }): Promise<'created' | 'updated'> {
-  const host = normalizeCredentialHost(input.domain)
+  const storeDomain = normalizeCredentialOrigin(input.domain)
+  const host = normalizeCredentialHost(storeDomain)
   const username = input.username.trim()
-  if (!host) throw new Error('域名无效')
+  if (!host || !storeDomain) throw new Error('域名无效')
   if (!username || !input.password) throw new Error('账号或密码为空')
 
-  const storeDomain = /^https?:\/\//i.test(input.domain.trim())
-    ? input.domain.trim().replace(/\/$/, '')
-    : `https://${host}`
   let name = input.name?.trim() || host
   let category: CredentialCategory = isPrivateHost(storeDomain) ? 'intranet' : 'custom'
   try {
@@ -272,7 +290,7 @@ export async function addOrUpdateCredentialFromLogin(input: {
   const list = await loadPtCredentials()
   const index = list.findIndex(
     (credential) =>
-      hostMatches(normalizeCredentialHost(credential.domain), host) &&
+      credentialLocationMatches(credential.domain, storeDomain) &&
       credential.username.trim().toLowerCase() === username.toLowerCase(),
   )
   const now = new Date().toISOString()
