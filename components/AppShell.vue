@@ -28,6 +28,7 @@
           :class="{
             'mp-view--full':
               appState.currentView === 'plugins' || appState.currentView === 'agent',
+            'mp-view--sites': appState.currentView === 'sites',
             /* 站点管理 / 下载 / 两步验证 / 凭据 / 智能助手：顶栏贴边，滚动交给页面内部列表区 */
             'mp-view--flush':
               appState.currentView === 'sites' ||
@@ -393,6 +394,11 @@ onBeforeUnmount(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+/* 站点管理保留页面间距；滚动仅发生在站点列表内部。 */
+.mp-view--sites {
+  padding: 10px;
+  overflow: hidden;
 }
 .mp-view-enter-active,
 .mp-view-leave-active {
